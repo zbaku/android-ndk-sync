@@ -24,7 +24,7 @@ arm_instance:
 
 # Task 1: 同步源码
 sync_task:
-  name: [1/4] Sync NDK Sources
+  name: Sync NDK Sources (1/4)
   timeout: 7200m
 
   env:
@@ -92,7 +92,7 @@ sync_task:
 
 # Task 2: 构建核心
 build_core_task:
-  name: [2/4] Build NDK Core
+  name: Build NDK Core (2/4)
   timeout: 14400m
   depends_on: [sync_task]
 
@@ -133,7 +133,7 @@ build_core_task:
 
 # Task 3: 构建库
 build_libs_task:
-  name: [3/4] Build NDK Libraries
+  name: Build NDK Libraries (3/4)
   timeout: 14400m
   depends_on: [build_core_task]
 
@@ -170,7 +170,7 @@ build_libs_task:
 
 # Task 4: 打包发布
 release_task:
-  name: [4/4] Package & Release
+  name: Package and Release (4/4)
   timeout: 7200m
   depends_on: [build_libs_task]
 
