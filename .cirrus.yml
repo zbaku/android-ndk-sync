@@ -1,0 +1,217 @@
+# .cirrus.yml
+container:
+  name: android-ndk-sync
+  builder_image: ubuntu-22-04-arm64
+
+env:
+  NDK_VERSION: "26"
+  AOSP_BRANCH: "ndk-r${NDK_VERSION}"
+  BUILD_TARGET: "sdk_phone64_arm64-userdebug"
+
+# 触发: 每季度 + 手动
+on:
+  cron:
+    - "0 0 1 1,4,7,10 *"
+  manual:
+    trigger_or_push: true
+
+# ARM64 Runner
+arm_instance:
+  image_project: cirrus-images
+  image: ubuntu-22-04-arm64
+  architecture: arm64
+  cpu: 8
+  memory: 16G
+  disk: 100G
+
+# Task 1: 同步源码
+sync_task:
+  name: [1/4] Sync NDK Sources
+  timeout: 7200m
+
+  sync_script: |
+    #!/bin/bash
+    set -e
+
+    echo "=== 1. Setup ==="
+    apt-get update && apt-get install -y \
+      repo git curl tar gzip xz-utils python3 \
+      ccache
+
+    export CCACHE_DIR=/workspace/ccache
+    export CCACHE_SIZE=10G
+
+    echo "=== 2. Init repo ==="
+    cd /workspace
+    mkdir -p aosp-ndk
+    cd aosp-ndk
+
+    # 使用 GitHub 镜像
+    repo init \
+      -u https://github.com/aosp-mirror/platform/manifest \
+      -b $AOSP_BRANCH \
+      --depth=1 \
+      --partial-clone \
+      --clone-filter=blob:limit=10M \
+      -g ndk,bionic,prebuilts/ndk,prebuilts/clang,prebuilts/gcc
+
+    echo "=== 3. Sync ==="
+    repo sync -c -j$(nproc) --depth=1 --fetch-submodules
+
+    echo "=== 4. Post-Check ==="
+    ./scripts/post-check/verify-sources.sh
+
+  cache:
+    folders: [/workspace/ccache]
+    key: ndk-src-${AOSP_BRANCH}
+
+  artifacts:
+    name: ndk-sources
+    path: /workspace/aosp-ndk/**
+    type: archive
+
+# Task 2: 构建核心
+build_core_task:
+  name: [2/4] Build NDK Core
+  timeout: 14400m
+  depends_on: [sync_task]
+
+  setup_script: |
+    echo "=== Pre-Check ==="
+    ./scripts/pre-check/check-batch2.sh
+
+  build_script: |
+    #!/bin/bash
+    set -e
+
+    echo "=== 1. Setup build env ==="
+    source build/envsetup.sh
+    lunch $BUILD_TARGET
+
+    export CCACHE_DIR=/workspace/ccache
+    ccache -M 10G
+
+    echo "=== 2. Build clang/lld ==="
+    make clang -j$(nproc)
+    make lld -j$(nproc)
+    make llvm-ar -j$(nproc)
+
+    echo "=== 3. Post-Check ==="
+    ./scripts/post-check/verify-binaries.sh out/ clang lld llvm-ar
+
+  cache:
+    folders: [/workspace/ccache]
+    key: ndk-core-${AOSP_BRANCH}
+
+  artifacts:
+    name: ndk-core
+    path: /workspace/aosp-ndk/out/**
+
+# Task 3: 构建库
+build_libs_task:
+  name: [3/4] Build NDK Libraries
+  timeout: 14400m
+  depends_on: [build_core_task]
+
+  setup_script: |
+    echo "=== Pre-Check ==="
+    ./scripts/pre-check/check-batch3.sh
+
+  build_script: |
+    #!/bin/bash
+    set -e
+
+    echo "=== 1. Build libc++ ==="
+    make libc++ -j$(nproc)
+
+    echo "=== 2. Build sysroot headers ==="
+    make sysroot -j$(nproc)
+
+    echo "=== 3. Package headers ==="
+    mkdir -p /workspace/ndk-headers
+    cp -r prebuilts/ndk/**/sysroot/usr/include /workspace/ndk-headers/ 2>/dev/null || true
+
+    echo "=== 4. Post-Check ==="
+    ./scripts/post-check/verify-libs.sh out/
+
+  artifacts:
+    name: ndk-libs
+    path: /workspace/aosp-ndk/out/**
+    path: /workspace/ndk-headers/**
+
+# Task 4: 打包发布
+release_task:
+  name: [4/4] Package & Release
+  timeout: 7200m
+  depends_on: [build_libs_task]
+
+  setup_script: |
+    echo "=== Pre-Check ==="
+    ./scripts/pre-check/check-batch4.sh
+
+  package_script: |
+    #!/bin/bash
+    set -e
+
+    echo "=== 1. Create NDK directory ==="
+    mkdir -p android-ndk-${NDK_VERSION}
+    mkdir -p android-ndk-${NDK_VERSION}/{toolchains,sysroot,platforms}
+
+    echo "=== 2. Copy toolchains ==="
+    cp -r out/target/product/*/obj/EXECUTABLES/*/llvm*/ toolchains/ 2>/dev/null || true
+
+    echo "=== 3. Copy sysroot ==="
+    cp -r out/target/product/*/sysroot/* android-ndk-${NDK_VERSION}/sysroot/ 2>/dev/null || true
+    cp -r ndk-headers/* android-ndk-${NDK_VERSION}/sysroot/usr/ 2>/dev/null || true
+
+    echo "=== 4. Create source.properties ==="
+    cat > android-ndk-${NDK_VERSION}/source.properties << EOF
+    Pkg.Desc = Android NDK
+    Pkg.Revision = ${NDK_VERSION}
+    NDK Version = ${NDK_VERSION}
+    Build Date = $(date -u +%Y-%m-%d)
+    Branch = ${AOSP_BRANCH}
+    EOF
+
+    echo "=== 5. Package ==="
+    cd /workspace
+    tar -czf android-ndk-${NDK_VERSION}.tar.gz android-ndk-${NDK_VERSION}/
+    sha256sum android-ndk-${NDK_VERSION}.tar.gz > android-ndk-${NDK_VERSION}.tar.gz.sha256
+
+    echo "=== 6. Post-Check ==="
+    ./scripts/post-check/verify-package.sh
+
+  release_script: |
+    #!/bin/bash
+    set -e
+
+    echo "=== Upload to GitHub Release ==="
+    apt-get update && apt-get install -y gh
+    echo "$GH_TOKEN" | gh auth login --token-stdin
+
+    TAG_NAME="sync-ndk-latest"
+
+    gh release create "$TAG_NAME" \
+      --title "Android NDK ${NDK_VERSION} (ARM64)" \
+      --notes "Built from AOSP ${AOSP_BRANCH}
+
+      ## Contents
+      - Clang/LLVM toolchain
+      - C++ standard library (libc++)
+      - Sysroot and headers
+      - Build date: $(date +%Y-%m-%d)
+
+      ## Verification
+      SHA256 checksums included.
+      " \
+      --draft=false
+
+    gh release upload "$TAG_NAME" \
+      android-ndk-${NDK_VERSION}.tar.gz \
+      android-ndk-${NDK_VERSION}.tar.gz.sha256 \
+      --clobber
+
+  artifacts:
+    name: ndk-package
+    path: android-ndk-${NDK_VERSION}.tar.gz
+    type: archive
