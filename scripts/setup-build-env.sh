@@ -9,6 +9,9 @@ mkdir -p $BUILD_DIR
 
 export DEBIAN_FRONTEND=noninteractive
 
+echo "=== 0. Go (Required for AOSP soong/blueprint) ==="
+apt-get install -y golang-go
+
 echo "=== 1. Core Build Tools ==="
 apt-get update
 apt-get install -y \
@@ -34,23 +37,32 @@ apt-get install -y \
     bison \
     flex \
     gperf \
-    bup
+    bup \
+    ncurses-dev
 
-echo "=== 2. Java JDK (Required for Android builds) ==="
+echo "=== 2. Go (for AOSP soong/blueprint) ==="
+apt-get install -y golang-go
+
+echo "=== 3. Java JDK (Required for Android builds) ==="
 apt-get install -y openjdk-17-jdk
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
 echo "  ✅ JAVA_HOME=$JAVA_HOME"
 
-echo "=== 3. LLVM/Clang (ARM64 Native - Primary) ==="
+echo "=== 4. LLVM/Clang (ARM64 Native - Primary) ==="
 apt-get install -y llvm llvm-dev clang lld
 
-echo "=== 4. Native ARM64 Libraries ==="
+echo "=== 5. Native ARM64 Libraries ==="
 apt-get install -y \
     libc6-dev-arm64 \
     zlib1g-dev \
-    libssl-dev
+    libssl-dev \
+    libtinfo-dev \
+    libffi-dev \
+    python3-dev \
+    uuid-dev \
+    libncurses-dev
 
-echo "=== 5. ARM64 GCC (Fallback/Backup) ==="
+echo "=== 6. ARM64 GCC (Fallback/Backup) ==="
 apt-get install -y \
     gcc-aarch64-linux-gnu \
     g++-aarch64-linux-gnu \
@@ -58,7 +70,7 @@ apt-get install -y \
     binutils-aarch64-linux-gnu \
     libstdc++-arm64-cross
 
-echo "=== 6. Create NDK-style Directory Structure ==="
+echo "=== 7. Create NDK-style Directory Structure ==="
 NDK_TOOLCHAIN=$BUILD_DIR/ndk-toolchain
 mkdir -p $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin
 mkdir -p $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/sysroot
@@ -77,7 +89,7 @@ ln -sf /usr/bin/aarch64-linux-gnu-ar $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64
 # Copy sysroot
 cp -ra /usr/aarch64-linux-gnu/* $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/sysroot/ 2>/dev/null || true
 
-echo "=== 7. Create Build Environment Script ==="
+echo "=== 8. Create Build Environment Script ==="
 cat > $BUILD_DIR/envsetup.sh << 'ENV'
 #!/bin/bash
 export WORKSPACE=${WORKSPACE:-/workspace}
@@ -115,7 +127,7 @@ ENV
 
 chmod +x $BUILD_DIR/envsetup.sh
 
-echo "=== 8. Verify Installations ==="
+echo "=== 9. Verify Installations ==="
 echo ""
 echo "Primary (LLVM):"
 echo "  clang: $(which clang || echo 'not found')"
