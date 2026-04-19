@@ -1,7 +1,5 @@
-# .cirrus.yml
-container:
-  name: android-ndk-sync
-  builder_image: ubuntu-22-04-arm64
+# Android NDK Sync CI/CD Configuration
+# 4-Task Pipeline: Sync → Build Core → Build Libs → Package & Release
 
 env:
   NDK_VERSION: "26"
@@ -29,20 +27,41 @@ sync_task:
   name: [1/4] Sync NDK Sources
   timeout: 7200m
 
-  sync_script: |
+  env:
+    GH_TOKEN: ENCRYPTED[your-github-token-here]
+
+  setup_script: |
     #!/bin/bash
     set -e
 
-    echo "=== 1. Setup ==="
+    echo "=== 0. Setup Build Environment ==="
     apt-get update && apt-get install -y \
-      repo git curl tar gzip xz-utils python3 \
-      ccache
+      build-essential cmake ninja-build pkg-config \
+      python3 python3-pip curl wget git rsync \
+      tar gzip xz-utils zip unzip ccache \
+      automake autoconf libtool bison flex gperf bup
 
-    export CCACHE_DIR=/workspace/ccache
-    export CCACHE_SIZE=10G
+    # Java for Android builds
+    apt-get install -y openjdk-17-jdk
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
+
+    # LLVM/Clang native ARM64
+    apt-get install -y llvm llvm-dev clang lld
+
+    # Native ARM64 libraries
+    apt-get install -y libc6-dev-arm64 zlib1g-dev libssl-dev
+
+    # ARM64 GCC (fallback)
+    apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+      libc6-dev-arm64-cross binutils-aarch64-linux-gnu libstdc++-arm64-cross
+
+    echo "=== 1. Clone CI Scripts Repo ==="
+    cd /workspace
+    if [ ! -d "android-ndk-sync" ]; then
+      git clone https://github.com/YOUR_ORG/android-ndk-sync.git
+    fi
 
     echo "=== 2. Init repo ==="
-    cd /workspace
     mkdir -p aosp-ndk
     cd aosp-ndk
 
@@ -59,7 +78,8 @@ sync_task:
     repo sync -c -j$(nproc) --depth=1 --fetch-submodules
 
     echo "=== 4. Post-Check ==="
-    ./scripts/post-check/verify-sources.sh
+    cd /workspace
+    ./android-ndk-sync/scripts/post-check/verify-sources.sh /workspace/aosp-ndk ${NDK_VERSION}
 
   cache:
     folders: [/workspace/ccache]
@@ -78,18 +98,21 @@ build_core_task:
 
   setup_script: |
     echo "=== Pre-Check ==="
-    ./scripts/pre-check/check-batch2.sh
+    ./android-ndk-sync/scripts/pre-check/check-batch2.sh
 
   build_script: |
     #!/bin/bash
     set -e
 
-    echo "=== 1. Setup build env ==="
-    source build/envsetup.sh
-    lunch $BUILD_TARGET
-
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
     export CCACHE_DIR=/workspace/ccache
     ccache -M 10G
+
+    cd /workspace/aosp-ndk
+
+    echo "=== 1. Setup AOSP build env ==="
+    source build/envsetup.sh
+    lunch $BUILD_TARGET
 
     echo "=== 2. Build clang/lld ==="
     make clang -j$(nproc)
@@ -97,7 +120,8 @@ build_core_task:
     make llvm-ar -j$(nproc)
 
     echo "=== 3. Post-Check ==="
-    ./scripts/post-check/verify-binaries.sh out/ clang lld llvm-ar
+    cd /workspace
+    ./android-ndk-sync/scripts/post-check/verify-binaries.sh /workspace/aosp-ndk/out/ clang lld llvm-ar
 
   cache:
     folders: [/workspace/ccache]
@@ -115,11 +139,15 @@ build_libs_task:
 
   setup_script: |
     echo "=== Pre-Check ==="
-    ./scripts/pre-check/check-batch3.sh
+    ./android-ndk-sync/scripts/pre-check/check-batch3.sh
 
   build_script: |
     #!/bin/bash
     set -e
+
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
+
+    cd /workspace/aosp-ndk
 
     echo "=== 1. Build libc++ ==="
     make libc++ -j$(nproc)
@@ -132,7 +160,8 @@ build_libs_task:
     cp -r prebuilts/ndk/**/sysroot/usr/include /workspace/ndk-headers/ 2>/dev/null || true
 
     echo "=== 4. Post-Check ==="
-    ./scripts/post-check/verify-libs.sh out/
+    cd /workspace
+    ./android-ndk-sync/scripts/post-check/verify-libs.sh /workspace/aosp-ndk/out/
 
   artifacts:
     name: ndk-libs
@@ -147,21 +176,28 @@ release_task:
 
   setup_script: |
     echo "=== Pre-Check ==="
-    ./scripts/pre-check/check-batch4.sh
+    ./android-ndk-sync/scripts/pre-check/check-batch4.sh
 
   package_script: |
     #!/bin/bash
     set -e
+
+    export NDK_VERSION=${NDK_VERSION:-26}
+    export AOSP_BRANCH="ndk-r${NDK_VERSION}"
+
+    echo "NDK Version: $NDK_VERSION"
+
+    cd /workspace
 
     echo "=== 1. Create NDK directory ==="
     mkdir -p android-ndk-${NDK_VERSION}
     mkdir -p android-ndk-${NDK_VERSION}/{toolchains,sysroot,platforms}
 
     echo "=== 2. Copy toolchains ==="
-    cp -r out/target/product/*/obj/EXECUTABLES/*/llvm*/ toolchains/ 2>/dev/null || true
+    cp -r aosp-ndk/out/target/product/*/obj/EXECUTABLES/*/llvm*/ android-ndk-${NDK_VERSION}/toolchains/ 2>/dev/null || true
 
     echo "=== 3. Copy sysroot ==="
-    cp -r out/target/product/*/sysroot/* android-ndk-${NDK_VERSION}/sysroot/ 2>/dev/null || true
+    cp -r aosp-ndk/out/target/product/*/sysroot/* android-ndk-${NDK_VERSION}/sysroot/ 2>/dev/null || true
     cp -r ndk-headers/* android-ndk-${NDK_VERSION}/sysroot/usr/ 2>/dev/null || true
 
     echo "=== 4. Create source.properties ==="
@@ -174,12 +210,11 @@ release_task:
     EOF
 
     echo "=== 5. Package ==="
-    cd /workspace
     tar -czf android-ndk-${NDK_VERSION}.tar.gz android-ndk-${NDK_VERSION}/
     sha256sum android-ndk-${NDK_VERSION}.tar.gz > android-ndk-${NDK_VERSION}.tar.gz.sha256
 
     echo "=== 6. Post-Check ==="
-    ./scripts/post-check/verify-package.sh
+    ./android-ndk-sync/scripts/post-check/verify-package.sh
 
   release_script: |
     #!/bin/bash
@@ -187,7 +222,7 @@ release_task:
 
     echo "=== Upload to GitHub Release ==="
     apt-get update && apt-get install -y gh
-    echo "$GH_TOKEN" | gh auth login --token-stdin
+    echo "$GH_TOKEN" | gh auth login --with-token
 
     TAG_NAME="sync-ndk-latest"
 

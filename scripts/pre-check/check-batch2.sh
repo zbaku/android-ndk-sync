@@ -25,8 +25,8 @@ if [ "$DISK_AVAIL" -lt 20 ]; then
 fi
 echo "✅ 磁盘空间: ${DISK_AVAIL}GB"
 
-# 检查必要工具
-for tool in make gcc g++; do
+# 检查必要工具 (Primary: clang/llvm, Fallback: gcc-aarch64)
+for tool in clang llvm-ar make; do
     if ! command -v $tool &> /dev/null; then
         echo "❌ 缺少工具: $tool"
         exit 1
