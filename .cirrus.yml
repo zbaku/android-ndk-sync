@@ -27,9 +27,6 @@ sync_task:
   name: Sync NDK Sources (1/4)
   timeout: 7200m
 
-  env:
-    GH_TOKEN: ENCRYPTED[your-github-token-here]
-
   setup_script: |
     #!/bin/bash
     set -e
@@ -58,7 +55,7 @@ sync_task:
     echo "=== 1. Clone CI Scripts Repo ==="
     cd /workspace
     if [ ! -d "android-ndk-sync" ]; then
-      git clone https://github.com/YOUR_ORG/android-ndk-sync.git
+      git clone https://github.com/zbaku/android-ndk-sync.git
     fi
 
     echo "=== 2. Init repo ==="
