@@ -6,7 +6,7 @@ NDK_DIR=${1:-/workspace/android-ndk}
 echo "=== NDK 功能测试 ==="
 
 # 设置 PATH (根据实际路径调整)
-export PATH="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+export PATH="${NDK_DIR}/toolchains/llvm/prebuilt/linux-aarch_64/bin:${PATH}"
 
 # 1. 简单 C 编译测试
 echo "1. 测试 C 编译..."
