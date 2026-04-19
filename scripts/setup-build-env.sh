@@ -41,7 +41,7 @@ apt-get install -y openjdk-17-jdk
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
 echo "  ✅ JAVA_HOME=$JAVA_HOME"
 
-echo "=== 3. LLVM/Clang (ARM64 Native) ==="
+echo "=== 3. LLVM/Clang (ARM64 Native - Primary) ==="
 apt-get install -y llvm llvm-dev clang lld
 
 echo "=== 4. Native ARM64 Libraries ==="
@@ -50,43 +50,79 @@ apt-get install -y \
     zlib1g-dev \
     libssl-dev
 
-echo "=== 5. Create Build Environment Script ==="
+echo "=== 5. ARM64 GCC (Fallback/Backup) ==="
+apt-get install -y \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    libc6-dev-arm64-cross \
+    binutils-aarch64-linux-gnu \
+    libstdc++-arm64-cross
+
+echo "=== 6. Create NDK-style Directory Structure ==="
+NDK_TOOLCHAIN=$BUILD_DIR/ndk-toolchain
+mkdir -p $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin
+mkdir -p $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/sysroot
+
+# Link primary tools (clang)
+ln -sf /usr/bin/clang $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/clang 2>/dev/null || true
+ln -sf /usr/bin/clang++ $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/clang++ 2>/dev/null || true
+ln -sf /usr/bin/llvm-ar $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/llvm-ar 2>/dev/null || true
+ln -sf /usr/bin/ld.lld $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/ld.lld 2>/dev/null || true
+
+# Link fallback tools (gcc-aarch64)
+ln -sf /usr/bin/aarch64-linux-gnu-gcc $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/aarch64-linux-gnu-gcc 2>/dev/null || true
+ln -sf /usr/bin/aarch64-linux-gnu-g++ $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/aarch64-linux-gnu-g++ 2>/dev/null || true
+ln -sf /usr/bin/aarch64-linux-gnu-ar $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/bin/aarch64-linux-gnu-ar 2>/dev/null || true
+
+# Copy sysroot
+cp -ra /usr/aarch64-linux-gnu/* $NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64/sysroot/ 2>/dev/null || true
+
+echo "=== 7. Create Build Environment Script ==="
 cat > $BUILD_DIR/envsetup.sh << 'ENV'
 #!/bin/bash
 export WORKSPACE=${WORKSPACE:-/workspace}
 export BUILD_DIR=$WORKSPACE/build-tools
+export NDK_TOOLCHAIN=$BUILD_DIR/ndk-toolchain
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
 
-# Native ARM64 tools (no cross-compilation needed)
-export PATH=/usr/bin:/bin:$PATH
+# Primary: Native ARM64 LLVM tools
+export LLVM_ROOT=/usr/lib/llvm
+export PATH=$LLVM_ROOT/bin:/usr/bin:/bin:$PATH
 export CC=clang
 export CXX=clang++
 export AR=llvm-ar
-export LD=llvm-link
+export LD=ld.lld
 export LLD=ld.lld
 
-# Android NDK specific
-export ANDROID_NDK_ROOT=$BUILD_DIR/ndk
-export ANDROID_SDK_ROOT=/usr
+# Fallback: ARM64 GCC (if LLVM unavailable)
+export CROSS_ROOT=$NDK_TOOLCHAIN/llvm/prebuilt/linux-aarch_64
+export PATH=$CROSS_ROOT/bin:$PATH
+export CC=gcc
+export CXX=g++
+export AR=ar
+export LD=ld
 
 # ccache
 export CCACHE_DIR=/workspace/ccache
 export CCACHE_SIZE=10G
 
-echo "NDK Build Environment (ARM64 Native):"
+echo "NDK Build Environment configured:"
+echo "  Primary: clang/llvm (ARM64 native)"
+echo "  Fallback: gcc-aarch64-linux-gnu"
 echo "  CC=$CC"
-echo "  CXX=$CXX"
 echo "  JAVA_HOME=$JAVA_HOME"
 ENV
 
 chmod +x $BUILD_DIR/envsetup.sh
 
-echo "=== 6. Verify Installations ==="
+echo "=== 8. Verify Installations ==="
 echo ""
-echo "Native tools:"
+echo "Primary (LLVM):"
 echo "  clang: $(which clang || echo 'not found')"
 echo "  lld: $(which lld || echo 'not found')"
-echo "  ninja: $(which ninja || echo 'not found')"
+echo ""
+echo "Fallback (GCC):"
+echo "  aarch64-linux-gnu-gcc: $(which aarch64-linux-gnu-gcc || echo 'not found')"
 echo ""
 echo "Java:"
 java -version 2>&1 | head -1
