@@ -10,9 +10,23 @@ export CCACHE_DIR=${CCACHE_DIR:-/workspace/ccache}
 echo "NDK Version: $NDK_VERSION"
 echo "Build Target: $BUILD_TARGET"
 
+echo "=== 0. Setup Build Environment ==="
+if [ -f "./scripts/setup-build-env.sh" ]; then
+    ./scripts/setup-build-env.sh /workspace
+elif [ -f "/workspace/android-ndk-sync/scripts/setup-build-env.sh" ]; then
+    /workspace/android-ndk-sync/scripts/setup-build-env.sh /workspace
+else
+    echo "⚠️ setup-build-env.sh not found, using system tools"
+fi
+
+# Source NDK environment
+if [ -f "/workspace/build-tools/envsetup.sh" ]; then
+    source /workspace/build-tools/envsetup.sh
+fi
+
 cd /workspace/aosp-ndk
 
-echo "=== 1. Setup build env ==="
+echo "=== 1. Setup AOSP build env ==="
 source build/envsetup.sh
 lunch $BUILD_TARGET
 
