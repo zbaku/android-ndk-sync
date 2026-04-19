@@ -13,19 +13,13 @@ on:
   manual:
     trigger_or_push: true
 
-# ARM64 Runner
-arm_instance:
-  image_project: cirrus-images
-  image: ubuntu-22-04-arm64
-  architecture: arm64
-  cpu: 8
-  memory: 16G
-  disk: 100G
-
 # Task 1: 同步源码
 sync_task:
   name: Sync NDK Sources (1/4)
   timeout: 7200m
+
+  arm_container:
+    image: ubuntu:22.04
 
   setup_script: |
     #!/bin/bash
@@ -93,6 +87,9 @@ build_core_task:
   timeout: 14400m
   depends_on: [sync_task]
 
+  arm_container:
+    image: ubuntu:22.04
+
   setup_script: |
     echo "=== Pre-Check ==="
     ./android-ndk-sync/scripts/pre-check/check-batch2.sh
@@ -134,6 +131,9 @@ build_libs_task:
   timeout: 14400m
   depends_on: [build_core_task]
 
+  arm_container:
+    image: ubuntu:22.04
+
   setup_script: |
     echo "=== Pre-Check ==="
     ./android-ndk-sync/scripts/pre-check/check-batch3.sh
@@ -171,6 +171,9 @@ release_task:
   timeout: 7200m
   depends_on: [build_libs_task]
 
+  arm_container:
+    image: ubuntu:22.04
+
   setup_script: |
     echo "=== Pre-Check ==="
     ./android-ndk-sync/scripts/pre-check/check-batch4.sh
@@ -198,13 +201,9 @@ release_task:
     cp -r ndk-headers/* android-ndk-${NDK_VERSION}/sysroot/usr/ 2>/dev/null || true
 
     echo "=== 4. Create source.properties ==="
-    cat > android-ndk-${NDK_VERSION}/source.properties << EOF
-    Pkg.Desc = Android NDK
-    Pkg.Revision = ${NDK_VERSION}
-    NDK Version = ${NDK_VERSION}
-    Build Date = $(date -u +%Y-%m-%d)
-    Branch = ${AOSP_BRANCH}
-    EOF
+    printf 'Pkg.Desc = Android NDK\nPkg.Revision = %s\nNDK Version = %s\nBuild Date = %s\nBranch = %s\n' \
+      "${NDK_VERSION}" "${NDK_VERSION}" "$(date -u +%Y-%m-%d)" "${AOSP_BRANCH}" \
+      > android-ndk-${NDK_VERSION}/source.properties
 
     echo "=== 5. Package ==="
     tar -czf android-ndk-${NDK_VERSION}.tar.gz android-ndk-${NDK_VERSION}/
